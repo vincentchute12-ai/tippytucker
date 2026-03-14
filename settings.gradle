@@ -1,0 +1,308 @@
+package com.presence.mod.config;
+
+import com.mojang.brigadier.CommandDispatcher;
+import com.mojang.brigadier.arguments.FloatArgumentType;
+import com.mojang.brigadier.arguments.IntegerArgumentType;
+import com.mojang.brigadier.arguments.StringArgumentType;
+import com.mojang.brigadier.arguments.BoolArgumentType;
+import com.presence.mod.data.ProfileManager;
+import net.fabricmc.fabric.api.command.v2.CommandRegistrationCallback;
+import net.minecraft.server.command.CommandManager;
+import net.minecraft.server.command.ServerCommandSource;
+import net.minecraft.text.Text;
+
+import static net.minecraft.server.command.CommandManager.literal;
+import static net.minecraft.server.command.CommandManager.argument;
+
+/**
+ * PRESENCE — ConfigCommand
+ *
+ * In-game commands for managing the config without leaving the world.
+ *
+ * Usage (requires OP level 2):
+ *   /presence reload              — reload config from disk
+ *   /presence status              — show sanity/escalation for nearby players
+ *   /presence set <key> <value>   — set a config value live
+ *   /presence reset <player>      — reset a player's horror profile
+ *   /presence scare <player>      — force a random horror event on a player
+ *   /presence difficulty <0-3>    — shorthand for preset difficulty
+ */
+public class ConfigCommand {
+
+    public static void register() {
+        CommandRegistrationCallback.EVENT.register((dispatcher, registryAccess, environment) -> {
+            registerCommands(dispatcher);
+        });
+    }
+
+    private static void registerCommands(CommandDispatcher<ServerCommandSource> dispatcher) {
+
+        dispatcher.register(literal("presence")
+            .requires(src -> src.hasPermissionLevel(2))
+
+            // /presence reload
+            .then(literal("reload")
+                .executes(ctx -> {
+                    PresenceConfig.reload();
+                    ctx.getSource().sendFeedback(
+                        () -> Text.literal("§a[Presence] Config reloaded from disk."), true);
+                    return 1;
+                })
+            )
+
+            // /presence status
+            .then(literal("status")
+                .executes(ctx -> {
+                    var server = ctx.getSource().getServer();
+                    var mgr = ProfileManager.get(server);
+                    var sb = new StringBuilder("§8[Presence] §7Player Status:\n");
+                    for (var player : server.getPlayerManager().getPlayerList()) {
+                        var profile = mgr.getProfile(player.getUuid());
+                        String tier = getSanityTier(profile.sanity);
+                        sb.append(String.format("  §f%s §8| §7Sanity: §e%.1f§7 | Tier: %s | Escalation: §c%d§7 | Deaths: §c%d\n",
+                            player.getName().getString(),
+                            profile.sanity,
+                            tier,
+                            profile.escalationLevel,
+                            profile.totalDeaths));
+                    }
+                    ctx.getSource().sendFeedback(() -> Text.literal(sb.toString()), false);
+                    return 1;
+                })
+            )
+
+            // /presence difficulty <preset>
+            .then(literal("difficulty")
+                .then(literal("off").executes(ctx -> setDifficulty(ctx.getSource(), 0f, "Off")))
+                .then(literal("easy").executes(ctx -> setDifficulty(ctx.getSource(), 0.5f, "Easy")))
+                .then(literal("normal").executes(ctx -> setDifficulty(ctx.getSource(), 1.0f, "Normal")))
+                .then(literal("hard").executes(ctx -> setDifficulty(ctx.getSource(), 1.5f, "Hard")))
+                .then(literal("nightmare").executes(ctx -> setDifficulty(ctx.getSource(), 2.5f, "Nightmare")))
+            )
+
+            // /presence set <key> <value>
+            .then(literal("set")
+                // Boolean settings
+                .then(literal("enabled")
+                    .then(argument("value", BoolArgumentType.bool())
+                        .executes(ctx -> {
+                            boolean val = BoolArgumentType.getBool(ctx, "value");
+                            PresenceConfig.get().enabled = val;
+                            PresenceConfig.get().save();
+                            return feedback(ctx.getSource(), "enabled", String.valueOf(val));
+                        })))
+                .then(literal("debugMode")
+                    .then(argument("value", BoolArgumentType.bool())
+                        .executes(ctx -> {
+                            boolean val = BoolArgumentType.getBool(ctx, "value");
+                            PresenceConfig.get().debugMode = val;
+                            PresenceConfig.get().save();
+                            return feedback(ctx.getSource(), "debugMode", String.valueOf(val));
+                        })))
+                .then(literal("debugAnnounceEvents")
+                    .then(argument("value", BoolArgumentType.bool())
+                        .executes(ctx -> {
+                            boolean val = BoolArgumentType.getBool(ctx, "value");
+                            PresenceConfig.get().debugAnnounceEvents = val;
+                            PresenceConfig.get().save();
+                            return feedback(ctx.getSource(), "debugAnnounceEvents", String.valueOf(val));
+                        })))
+                .then(literal("multiplayerHorrorEnabled")
+                    .then(argument("value", BoolArgumentType.bool())
+                        .executes(ctx -> {
+                            boolean val = BoolArgumentType.getBool(ctx, "value");
+                            PresenceConfig.get().multiplayerHorrorEnabled = val;
+                            PresenceConfig.get().save();
+                            return feedback(ctx.getSource(), "multiplayerHorrorEnabled", String.valueOf(val));
+                        })))
+                .then(literal("mimicEnabled")
+                    .then(argument("value", BoolArgumentType.bool())
+                        .executes(ctx -> {
+                            boolean val = BoolArgumentType.getBool(ctx, "value");
+                            PresenceConfig.get().mimicEnabled = val;
+                            PresenceConfig.get().save();
+                            return feedback(ctx.getSource(), "mimicEnabled", String.valueOf(val));
+                        })))
+                .then(literal("visualEffectsEnabled")
+                    .then(argument("value", BoolArgumentType.bool())
+                        .executes(ctx -> {
+                            boolean val = BoolArgumentType.getBool(ctx, "value");
+                            PresenceConfig.get().visualEffectsEnabled = val;
+                            PresenceConfig.get().save();
+                            return feedback(ctx.getSource(), "visualEffectsEnabled", String.valueOf(val));
+                        })))
+
+                // Float settings
+                .then(literal("difficultyMultiplier")
+                    .then(argument("value", FloatArgumentType.floatArg(0f, 5f))
+                        .executes(ctx -> {
+                            float val = FloatArgumentType.getFloat(ctx, "value");
+                            PresenceConfig.get().difficultyMultiplier = val;
+                            PresenceConfig.get().save();
+                            return feedback(ctx.getSource(), "difficultyMultiplier", String.valueOf(val));
+                        })))
+                .then(literal("soundMasterVolume")
+                    .then(argument("value", FloatArgumentType.floatArg(0f, 2f))
+                        .executes(ctx -> {
+                            float val = FloatArgumentType.getFloat(ctx, "value");
+                            PresenceConfig.get().soundMasterVolume = val;
+                            PresenceConfig.get().save();
+                            return feedback(ctx.getSource(), "soundMasterVolume", String.valueOf(val));
+                        })))
+                .then(literal("vignetteMaxIntensity")
+                    .then(argument("value", FloatArgumentType.floatArg(0f, 1f))
+                        .executes(ctx -> {
+                            float val = FloatArgumentType.getFloat(ctx, "value");
+                            PresenceConfig.get().vignetteMaxIntensity = val;
+                            PresenceConfig.get().save();
+                            return feedback(ctx.getSource(), "vignetteMaxIntensity", String.valueOf(val));
+                        })))
+                .then(literal("sanityDecayBase")
+                    .then(argument("value", FloatArgumentType.floatArg(0f, 0.1f))
+                        .executes(ctx -> {
+                            float val = FloatArgumentType.getFloat(ctx, "value");
+                            PresenceConfig.get().sanityDecayBase = val;
+                            PresenceConfig.get().save();
+                            return feedback(ctx.getSource(), "sanityDecayBase", String.valueOf(val));
+                        })))
+                .then(literal("sanityRecoverySleep")
+                    .then(argument("value", FloatArgumentType.floatArg(0f, 50f))
+                        .executes(ctx -> {
+                            float val = FloatArgumentType.getFloat(ctx, "value");
+                            PresenceConfig.get().sanityRecoverySleep = val;
+                            PresenceConfig.get().save();
+                            return feedback(ctx.getSource(), "sanityRecoverySleep", String.valueOf(val));
+                        })))
+
+                // Int settings
+                .then(literal("horrorCooldownBase")
+                    .then(argument("value", IntegerArgumentType.integer(100, 72000))
+                        .executes(ctx -> {
+                            int val = IntegerArgumentType.getInteger(ctx, "value");
+                            PresenceConfig.get().horrorCooldownBase = val;
+                            PresenceConfig.get().save();
+                            return feedback(ctx.getSource(), "horrorCooldownBase", String.valueOf(val));
+                        })))
+                .then(literal("horrorCooldownMin")
+                    .then(argument("value", IntegerArgumentType.integer(20, 3600))
+                        .executes(ctx -> {
+                            int val = IntegerArgumentType.getInteger(ctx, "value");
+                            PresenceConfig.get().horrorCooldownMin = val;
+                            PresenceConfig.get().save();
+                            return feedback(ctx.getSource(), "horrorCooldownMin", String.valueOf(val));
+                        })))
+                .then(literal("lightsOutRadius")
+                    .then(argument("value", IntegerArgumentType.integer(1, 32))
+                        .executes(ctx -> {
+                            int val = IntegerArgumentType.getInteger(ctx, "value");
+                            PresenceConfig.get().lightsOutRadius = val;
+                            PresenceConfig.get().save();
+                            return feedback(ctx.getSource(), "lightsOutRadius", String.valueOf(val));
+                        })))
+            )
+
+            // /presence reset <player>
+            .then(literal("reset")
+                .then(argument("player", StringArgumentType.word())
+                    .executes(ctx -> {
+                        String playerName = StringArgumentType.getString(ctx, "player");
+                        var server = ctx.getSource().getServer();
+                        var target = server.getPlayerManager().getPlayer(playerName);
+                        if (target == null) {
+                            ctx.getSource().sendError(Text.literal("§c[Presence] Player not found: " + playerName));
+                            return 0;
+                        }
+                        var mgr = ProfileManager.get(server);
+                        var freshProfile = new com.presence.mod.data.PlayerProfile();
+                        // Keep it by replacing with fresh
+                        mgr.getProfile(target.getUuid()).sanity = 100f;
+                        mgr.getProfile(target.getUuid()).escalationLevel = 0;
+                        mgr.getProfile(target.getUuid()).totalDeaths = 0;
+                        mgr.getProfile(target.getUuid()).deathLocations.clear();
+                        mgr.getProfile(target.getUuid()).horrorEventCount = 0;
+                        mgr.markDirty();
+                        ctx.getSource().sendFeedback(
+                            () -> Text.literal("§a[Presence] Reset horror profile for §f" + playerName), true);
+                        return 1;
+                    }))
+            )
+
+            // /presence scare <player> — force a random horror event
+            .then(literal("scare")
+                .then(argument("player", StringArgumentType.word())
+                    .executes(ctx -> {
+                        String playerName = StringArgumentType.getString(ctx, "player");
+                        var server = ctx.getSource().getServer();
+                        var target = server.getPlayerManager().getPlayer(playerName);
+                        if (target == null) {
+                            ctx.getSource().sendError(Text.literal("§c[Presence] Player not found: " + playerName));
+                            return 0;
+                        }
+                        var mgr = ProfileManager.get(server);
+                        var profile = mgr.getProfile(target.getUuid());
+                        com.presence.mod.system.HorrorDirector.forceScare(target, profile);
+                        ctx.getSource().sendFeedback(
+                            () -> Text.literal("§a[Presence] Triggered scare on §f" + playerName), true);
+                        return 1;
+                    }))
+            )
+
+            // /presence resetwarning — forces warning to show again next load
+            .then(literal("resetwarning")
+                .executes(ctx -> {
+                    // This is server-side; we send a chat message instructing the player
+                    // The actual reset is client-side (WarningScreenState)
+                    ctx.getSource().sendFeedback(
+                        () -> net.minecraft.text.Text.literal(
+                            "§a[Presence] Warning screen will show again on next world load. " +
+                            "§7(Run on client: delete config/presence_seen_warnings.txt)"), true);
+                    return 1;
+                })
+            )
+
+            // /presence help
+            .then(literal("help")
+                .executes(ctx -> {
+                    String help = """
+                        §8[Presence] §7Commands:
+                          §f/presence reload §7— Reload config from presence.json
+                          §f/presence status §7— Show all players' sanity/escalation
+                          §f/presence difficulty <off|easy|normal|hard|nightmare>
+                          §f/presence set <key> <value> §7— Set a config value live
+                          §f/presence reset <player> §7— Reset a player's horror profile
+                          §f/presence scare <player> §7— Force a horror event on a player
+                          §f/presence help §7— Show this message
+                        §8All commands require OP level 2.""";
+                    ctx.getSource().sendFeedback(() -> Text.literal(help), false);
+                    return 1;
+                })
+            )
+        );
+    }
+
+    private static int setDifficulty(ServerCommandSource source, float multiplier, String label) {
+        PresenceConfig cfg = PresenceConfig.get();
+        cfg.difficultyMultiplier = multiplier;
+        if (multiplier == 0f) cfg.enabled = false;
+        else cfg.enabled = true;
+        cfg.save();
+        source.sendFeedback(
+            () -> Text.literal("§a[Presence] Difficulty set to §f" + label
+                + " §7(multiplier: §e" + multiplier + "§7)"), true);
+        return 1;
+    }
+
+    private static int feedback(ServerCommandSource source, String key, String value) {
+        source.sendFeedback(
+            () -> Text.literal("§a[Presence] §f" + key + " §8= §e" + value), true);
+        return 1;
+    }
+
+    private static String getSanityTier(float sanity) {
+        if (sanity >= 80) return "§aStable";
+        if (sanity >= 60) return "§eUnsettled";
+        if (sanity >= 40) return "§6Disturbed";
+        if (sanity >= 20) return "§cBreaking";
+        return "§4§lShattered";
+    }
+}
